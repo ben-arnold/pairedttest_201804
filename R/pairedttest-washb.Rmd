@@ -1,0 +1,283 @@
+---
+title: "The Paired t-test"
+output: 
+  html_notebook:
+    theme: default
+    highlight: haddock
+    toc: true
+    toc_depth: 2
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
+---
+
+# Introduction
+
+This R notebook provides an example of how to conduct a paired t test. It is a companion to slides that include more motivation about the particular study and the underpinnings of the paired t test.  The slides are in the GitHub repository with this script:
+
+https://github.com/ben-arnold/pairedttest_201804
+
+The analysis uses data collected from the WASH Benefits Bangladesh trial:
+
+Luby SP, Rahman M, Arnold BF, Unicomb L, Ashraf S, Winch PJ, et al. Effects of water quality, sanitation, handwashing, and nutritional interventions on diarrhoea and child growth in rural Bangladesh: a cluster randomised controlled trial. Lancet Glob Health. 2018;6: e302–e315.
+
+https://www.ncbi.nlm.nih.gov/pubmed/29396217
+
+
+# Script preamble
+```{r preamble, eval=TRUE,echo=TRUE,results='hide'}
+# Preamble - load packages and save colors for plotting
+library(tidyverse)
+
+
+# bright color blind palette:  https://personal.sron.nl/~pault/ 
+cblack <- "#000004FF"
+cblue <- "#3366AA"
+cteal <- "#11AA99"
+cgreen <- "#66AA55"
+cchartr <- "#CCCC55"
+cmagent <- "#992288"
+cred <- "#EE3333"
+corange <- "#EEA722"
+cyellow <- "#FFEE33"
+cgrey <- "#777777"
+
+```
+
+## Load and process the Bangladesh trial data
+
+These data are publicly available through the Open Science Framework:
+
+https://osf.io/pqzj5/
+
+```{r load bangladesh data, results='hide',eval=TRUE}
+# load and merge the final analysis files
+# treatment assignments, enrollment charactersitics, and anthropometry measurements
+d_tr    <- read.csv("~/pairedttest_201804/data/washb-bangladesh-tr-public.csv")
+d_anth  <- read.csv('~/pairedttest_201804/data/washb-bangladesh-anthro-public.csv')
+
+
+#  merge the analysis files, loaded above
+d <- left_join(d_tr,d_anth,by=c("clusterid","block"))
+
+# filter to children with measurements at year 2 (final endpoint)
+# with valid LAZ measuresments (laz_x==0)
+# filter to the control and nutrition arms
+
+d <- d %>%
+  filter(svy==2 & laz_x==0 & tr %in% c("Control","Nutrition")) %>%
+  select(block,tr,dataid,laz) %>%
+  mutate(tr=droplevels(tr))
+
+```
+
+
+## Calculate block-level means
+
+By calculating mean LAZ among children measured in each block, by treatment arm, we have 90 matched pair observations.
+```{r block level means}
+# block-level means by treatment group
+dmu <- d %>%
+  group_by(block,tr) %>%
+  summarize(laz=mean(laz))
+
+# reshape means wide by group and calculate differences
+dlaz <- dmu %>%
+  spread(tr,laz) %>%
+  mutate(diff=Nutrition - Control)
+```
+
+# Descriptive Analyses and Verifying Assumptions
+
+The data include 90 blocks (matched pairs) of control and nutrition intervention clusters. In the preamble of this script, we computed a mean length-for-age Z-score within each block. This leads to 90 observations of control and intervention means, along with their difference.
+
+
+## View of the data
+
+Here are the first 6 observations from the data
+
+```{r view the data}
+# print the top of the data frame
+head(round(dlaz,3))
+
+```
+
+
+
+## Verifying assumptions
+
+A paired t-test has two main assumptions:
+
+    1. The difference in outcomes within pairs is normally distributed
+    2. The pairs are independent
+  
+The second assumption is difficult to confirm empirically. In the WASH Benefits Bangladesh trial, all study clusters were separated by at least 1 kilometer to ensure that all clusters were independent and there were no between-group "spillover" effects of the intervention.
+
+Below, we can examine the distributions of mean LAZ in each group as well as the distribution of the difference between them.
+
+```{r laz distributions}
+
+p <- ggplot(data=dmu,aes(x=laz,group=tr,fill=tr)) + 
+  geom_density(color=NA,alpha=0.5) +
+  labs(title="Distribution of block-level mean LAZ by treatment group") +
+  scale_fill_manual(values=c(cblue,corange)) +
+  theme_minimal()
+
+p
+```
+
+```{r laz control qqplot}
+qqnorm(dlaz$Control,pch=20,bty="l",las=1,col=cblue,main="Normal Q-Q plot of Control Means")
+qqline(dlaz$Control)
+```
+```{r laz nutrition qqplot}
+qqnorm(dlaz$Nutrition,pch=20,bty="l",las=1,col=corange,main="Normal Q-Q plot of Nutrition Means")
+qqline(dlaz$Nutrition)
+```
+
+```{r laz diff distribution}
+pdiff <- ggplot(data=dlaz,aes(x=diff,fill=cteal)) + 
+  geom_density(color=NA,alpha=0.5) +
+  labs(title="Distribution of within-pair differences of mean LAZ") +
+  scale_fill_manual(values=c(cteal)) +
+  theme_minimal() + theme(legend.position="none")
+
+pdiff
+```
+
+Visually confirm with a quantile-quantile plot that the differences are approximately normally distributed. 
+```{r laz diff qqplot}
+qqnorm(dlaz$diff,pch=20,bty="l",las=1,col=cteal,main="Normal Q-Q plot of within-pair differences")
+qqline(dlaz$diff)
+
+```
+The sample quantiles versus theoretical quantiles of a normal distribution fall very close to a straight line, which is consistent with the differences being approximately normally distributed.
+
+
+## Mean and SD by intervention group
+
+Estimate each intervention group's sample mean ($\hat{\mu}$) and standard deviation ($\hat{S}$) across blocks.
+```{r summary statistics}
+
+summ <- dmu %>%
+  group_by(tr) %>%
+  summarize(mean=mean(laz),sd=sd(laz))
+
+knitr::kable(summ,digits=3,format="markdown")
+
+```
+
+The mean LAZ is slightly higher in the nutrition intervention arm ($\mu_N$ = `r sprintf("%1.2f",summ$mean[2])`) than the control arm ($\mu_C$ = `r sprintf("%1.2f",summ$mean[1])`).  The standard deviation in the control group is slightly lower because by design there were more children measured in the control group within each block -- the trial had a 2:1 allocation ratio of control to treatment clusters because of 6 separate treatement comparisons against the same control group (this is a more advanced study design topic).
+
+# Mean difference and its SE
+
+```{r meandiff}
+# print the first 3 rows of the dataset
+dlaz[1:3,]
+# mean of the differences
+mean(dlaz$diff)
+# standard deviation of the differences
+sd(dlaz$diff)
+# standard error of the differences
+sd(dlaz$diff) / sqrt(length(dlaz$diff))
+
+
+```
+
+
+# Paired t test
+
+Running a paired t test in R is very straight forward using the `t.test` function.
+```{r paired t-test}
+
+t_paired <- t.test(x=dlaz$Nutrition,y=dlaz$Control,
+                   alternative="two.sided",
+                   paired=TRUE)
+
+t_paired
+
+```
+
+# One-sample t test of differences
+
+A paired t test is identical to a one-sample t test on the pair-wise differences. Note that the difference is that we supply just one vector to the function (the difference), and do not specify that it is a paired test. The t statistics, p-values, and confidence intervals are identical to the previous call to `t.test`.
+
+```{r one sample t-test}
+
+t_1samp <- t.test(x=dlaz$diff,
+                   alternative="two.sided")
+
+t_1samp
+
+```
+
+# Two sample t test
+
+A two-sample t test that ignores the pair matching will be less efficient if the pair matching was effective. Although this is not a perfect comparison since the pair matching is implicit in the design, we can ignore the pairing in the analysis to see if it is less efficient. It is:
+
+```{r two sample t-test}
+
+t_2samp <- t.test(x=dlaz$Nutrition,y=dlaz$Control,
+                  alternative="two.sided",
+                  paired=FALSE, var.equal=TRUE)
+
+t_2samp
+
+```
+The control arm had roughly twice as many observations per block than the nutrition arm, and thus slightly lower variance. Allowing for unequal variances in the two groups using the Welch two-sample test lowers the degrees of freedom slightly but not enough to influence the t-statistic or associated p-value.
+
+```{r two sample t-test unequal}
+
+t_2samp_uneq <- t.test(x=dlaz$Nutrition,y=dlaz$Control,
+                  alternative="two.sided",
+                  paired=FALSE, var.equal=FALSE)
+
+t_2samp_uneq
+
+```
+
+# Efficiency gains: explanation
+
+When analyzing the WASH Benefits trial's primary outcome of child LAZ, the difference between groups was `r round(t_paired$estimate,3)`. A two sample t-test and paired t-test resulted in the identical point estimate for the difference. However, the statistical test of the null hypothesis that the difference between groups was equal to zero ($\bar{X} - \mu = 0$) was more strongly rejected using a paired t-test ($t =$ `r round(t_paired$statistic,3)`, df= `r t_paired$parameter`, $p =$ `r sprintf("%1.6f",t_paired$p.value)` ) compared with a 2-sample t-test that ignored the pair matching in the analysis ($t =$ `r round(t_2samp$statistic,3)`, df= `r round(t_2samp$parameter,2)`, $p =$ `r sprintf("%1.6f",t_2samp$p.value)` )
+```{r laz correlation}
+cor_pearson <- cor.test(x=dlaz$Nutrition,y=dlaz$Control,
+                    alternative="two.sided",
+                    method="pearson")
+cor_pearson
+
+
+```
+
+The "relative efficacy" of the paired t-test compared with with a two-sample t-test is $1/(1-r)$,compared with a two-independent sample t test in a parallel comparison. If $r=0.5$, the relative efficacy is 2. This means that 100 paired observations would have the same power to detect differences as an unpaired study of 200 observations per group. 
+
+For additional details, see: Hsu & Lachenbruch, Paired t test. Encycl. of Biostatistics, 2005, doi:10.1002/0470011815.b2a15112
+
+In the WASH Benefits trial the relative effiacy was: 1/(1-`r sprintf("%1.2f",cor_pearson$estimate)`) = `r sprintf("%1.2f",1/(1-cor_pearson$estimate))`.
+
+This means we would have needed to enroll 90 x `r sprintf("%1.2f",1/(1-cor_pearson$estimate))` = `r sprintf("%1.0f",90/(1-cor_pearson$estimate))` clusters per group without pair matching to have had similar power to the geographic pair-matched design in a t test analysis of cluster-level means.
+
+```{r rel efficiency}
+rho <- seq(0,0.5,by=0.01)
+reff <- 1/(1-rho)
+preff <- ggplot(data=data.frame(rho,reff),aes(x=rho,y=reff)) +
+  geom_line(color="blue") + 
+  geom_line(data=data.frame(x=c(0,cor_pearson$estimate),y=rep(1/(1-cor_pearson$estimate),2)),aes(x=x,y=y),lty="dashed") + 
+  geom_line(data=data.frame(x=rep(cor_pearson$estimate,2),y=c(0,1/(1-cor_pearson$estimate))),aes(x=x,y=y),lty="dashed") +
+  annotate("text",x=cor_pearson$estimate-0.12,y=1/(1-cor_pearson$estimate)+0.03,label="WASH Benefits Bangladesh") +
+  scale_y_continuous(breaks=seq(1,2,by=0.5))+
+  coord_cartesian(ylim=c(1,2)) +
+  labs(x=expression(paste("Correlation between paired measurements (",italic(r),")")),y="Relative efficacy of pair-matching") +
+  theme_minimal()
+
+preff
+
+```
+
+# Session Info
+```{r session info}
+sessionInfo()
+```
+
+
+
+
