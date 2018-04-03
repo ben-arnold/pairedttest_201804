@@ -1,0 +1,271 @@
+---
+title: "The Paired t-test"
+output: pdf_document
+---
+
+# Overview
+This script simply provides some additional materials that were used to make the power point presentation, such as TeX equations and illustrative figures.
+
+# Script preamble
+```{r preamble, eval=TRUE,echo=TRUE,results='hide'}
+# Preamble - load packages and save colors for plotting
+library(tidyverse)
+
+
+# bright color blind palette:  https://personal.sron.nl/~pault/ 
+cblack <- "#000004FF"
+cblue <- "#3366AA"
+cteal <- "#11AA99"
+cgreen <- "#66AA55"
+cchartr <- "#CCCC55"
+cmagent <- "#992288"
+cred <- "#EE3333"
+corange <- "#EEA722"
+cyellow <- "#FFEE33"
+cgrey <- "#777777"
+
+```
+
+
+
+# Notation used in the presentation
+
+The mean within-pair difference, $\mu_D$, is estimated as:
+
+\begin{displaymath}
+\hat{\mu}_D = \frac{1}{n} \sum_i^n D_i
+\end{displaymath}
+
+An estimate of the standard deviation of $D$ is:
+
+\begin{displaymath}
+\hat{S}_D^2 = \frac{1}{n-1} \sum_i^n (D_i - \hat{\mu}_D)^2 
+\end{displaymath}
+
+With standard error:
+
+\begin{displaymath}
+SE(\hat{\mu}_D) = \frac{\hat{S}_D}{\sqrt{n}}
+\end{displaymath}
+
+
+A t statistic based on the paired differences is:
+
+\begin{displaymath}
+t = \frac{\hat{\mu}_D}{(\hat{S}_D / \sqrt{n}) } =  \frac{\hat{\mu}_D}{SE(\hat{\mu}_D)}
+\end{displaymath}
+
+
+Comparing the paired t test with a two sample t test.
+
+If the variances of $Y_C$ and $Y_I$ are equal ($\sigma$), the variance of their paired difference, $D$ is:
+
+\begin{displaymath}
+\sigma_{D}^2 = 2 \sigma^2 (1-r)
+\end{displaymath}
+
+In an unpaired study, where $Y_C$ and $Y_I$ are independent samples, again with equal variance, the variance of their difference is the sum of their variances:
+
+
+\begin{displaymath}
+\sigma_{Y_I - Y_C}^2 = \sigma^2 + \sigma^2 = 2 \sigma^2
+\end{displaymath}
+
+
+# WHO standard normal distribution
+
+```{r who zscores}
+qz <- seq(-5,5,by=0.01)
+dz <- dnorm(qz,mean=0,sd=1)
+dstd <- data.frame(qz,dz)
+
+pz <- ggplot(data=dstd,aes(x=qz,y=dz)) +
+  geom_line() +
+  scale_x_continuous(breaks=-3:3) +
+  coord_cartesian(xlim=c(-3,3)) +
+  labs(x="WHO Length-for-age Z score (LAZ)",y="Density") +
+  theme_minimal(base_size=16)
+pz
+ggsave(filename="~/washb-pairedttest/results/who-laz.png",plot=pz,device="png")
+
+
+pzs <- pz +
+  scale_x_continuous(breaks=-5:4) +
+  coord_cartesian(xlim=c(-5,4)) +
+  geom_vline(xintercept=-2,lty="dashed") +
+  geom_vline(xintercept=-3,lty="dashed") +
+  annotate("text",x=-2.5,y=0.41,label="Stunted") +
+  annotate("text",x=-4,y=0.41,label="Severely stunted")
+
+pzs
+ggsave(filename="~/washb-pairedttest/results/who-laz-labeled.png",plot=pzs,device="png")
+```
+
+
+```{r load bangladesh data}
+# load and merge the final analysis files
+# treatment assignments, enrollment charactersitics, and anthropometry measurements
+d_tr    <- read.csv("~/washb-pairedttest/data/washb-bangladesh-tr-public.csv")
+d_anth  <- read.csv('~/washb-pairedttest/data/washb-bangladesh-anthro-public.csv')
+
+
+#  merge the analysis files, loaded above
+d <- left_join(d_tr,d_anth,by=c("clusterid","block"))
+
+# filter to children with measurements at year 2 (final endpoint)
+# with valid LAZ measuresments (laz_x==0)
+# filter to the control arm
+dc <- d %>%
+  filter(svy==2 & laz_x==0 & tr %in% c("Control")) %>%
+  select(block,tr,dataid,length,laz) %>%
+  mutate(tr=droplevels(tr))
+
+```
+
+```{r mean and sd estimates}
+
+summary(select(dc,length,laz))
+
+dsum <- dc %>% select(length,laz) %>% summarize(sd_len=sd(length),sd_laz=sd(laz))
+dsum
+
+
+```
+
+```{r figures of length and laz}
+
+plength <- ggplot(data=dc,aes(x=length)) +
+  geom_density(fill=cblue,color=NA,alpha=0.5) +
+  labs(x="Length in centimeters") +
+  annotate("text",x=73,y=0.11,label="Bangladesh Trial\nControl Group",color=cblue) +
+
+  theme_minimal(base_size = 16)
+
+plength
+ggsave(filename="~/washb-pairedttest/results/washb-control-cm.png",plot=plength,device="png")
+
+
+
+plaz <- ggplot(data=dc,aes(x=laz)) +
+  geom_density(fill=cblue,color=NA,alpha=0.5) +
+  geom_line(data=dstd,aes(x=qz,y=dz))+
+  scale_x_continuous(breaks=-5:4) +
+  coord_cartesian(xlim=c(-5,3))+
+  labs(x="Length-for-age Z-score (LAZ)") +
+  annotate("text",x=2,y=0.38,label="WHO Reference Standard") +
+  annotate("text",x=-3.5,y=0.38,label="Bangladesh Trial\nControl Group",color=cblue) +
+  theme_minimal(base_size = 16)
+
+plaz
+ggsave(filename="~/washb-pairedttest/results/washb-control-laz.png",plot=plaz,device="png")
+
+```
+
+
+# Null distribution
+Sampling distribution of the mean, under the null
+```{r plot the t distribution}
+# normal distribution with mean 0 and SD = 0.053 (the SE of the differences observed in the Bangladesh trial)
+qt <- seq(-5,5,by=0.01)
+dent <- dt(qt,df=89)
+datt <- data.frame(qt,dent)
+
+pt89 <- ggplot(data=datt,aes(x=qt,y=dent)) +
+  geom_line() +
+  scale_x_continuous(breaks=-5:5) +
+  coord_cartesian(xlim=c(-5,5)) +
+  labs(x="t distribution (df=89)",y="Density") +
+  theme_minimal(base_size=16)
+pt89
+
+ggsave(filename="~/washb-pairedttest/results/tdist-89df.png",plot=pt89,device="png")
+
+
+```
+
+# t distribution
+
+```{r plot the null distribution}
+# t distribution with 89 degrees of freedom
+qnull <- seq(-0.3,0.3,by=0.001)
+nullden <- dnorm(qnull,mean=0,sd=0.05312652)
+dnull <- data.frame(qnull,nullden)
+
+pnull <- ggplot(data=dnull,aes(x=qnull,y=nullden)) +
+  geom_line() +
+  scale_x_continuous(breaks=round(seq(-0.3,0.3,by=0.1),2)) +
+  coord_cartesian(xlim=c(-0.3,0.3)) +
+  labs(x="Distribution of pair-wise differences under the null",y="Density") +
+  theme_minimal(base_size=16)
+pnull
+
+ggsave(filename="~/washb-pairedttest/results/washb-nulldist.png",plot=pt89,device="png")
+
+
+```
+
+
+# Student's first t-test
+
+```{r student data}
+m1 <- c(0.7,-1.6,-0.2,-1.2,-0.1,3.4,3.7,0.8,0,2)
+m2 <- c(1.9,0.8,1.1,0.1,-0.1,4.4,5.5,1.6,4.6,3.4)
+dstudent <- data.frame(id=1:10,m1,m2) %>%
+  mutate(diff=m2-m1)
+
+summary(dstudent)
+apply(dstudent,2,sd)
+print(dstudent)
+
+
+```
+```{r plot student data}
+dlong <- dstudent %>%
+  select(id,m1,m2) %>%
+  gather(key="measure",value="m",-id) %>%
+  mutate(measure=factor(ifelse(measure=="m1","Dextro","Laevo")))
+
+pstrip <- ggplot(data=dlong,aes(x=measure,y=m,group=id)) +
+  geom_point() +
+  labs(y="Additional hours slept",x="") +
+  theme_minimal(base_size=18)
+
+pstrip
+ggsave(filename="~/washb-pairedttest/results/student-strip.png",plot=pstrip,device="png")
+
+cbcols <- c(cblack,cred,corange,cyellow,cchartr,cgreen,cteal,cblue,cmagent,cgrey)
+
+pline <- pstrip +  
+  aes(color=factor(id)) + 
+  geom_line() +
+  scale_color_manual(values=cbcols,guide=guide_legend(title="Patient")) +
+  theme_minimal(base_size=18) +
+  theme(legend.position="none")
+
+pline
+ggsave(filename="~/washb-pairedttest/results/student-line.png",plot=pline,device="png")
+
+
+```
+```{r student ttests}
+
+t.test(dstudent$m1,dstudent$m2,paired=FALSE)
+
+t.test(dstudent$m1,dstudent$m2,paired=TRUE)
+
+student_cor <- cor.test(dstudent$m1,dstudent$m2)
+print(student_cor)
+
+# relative efficiency:
+print(1/(1-student_cor$estimate))
+
+```
+
+# Session Info
+```{r session info}
+sessionInfo()
+```
+
+
+
+
